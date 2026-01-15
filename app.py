@@ -2,89 +2,68 @@ import streamlit as st
 import fitz  # PyMuPDF
 import pandas as pd
 import re
+import pytesseract
+from PIL import Image
+import io
 
-st.set_page_config(page_title="Pro Quiz Extractor", page_icon="🎯")
+st.set_page_config(page_title="Universal Quiz Extractor", page_icon="🤖")
 
-def extract_from_column(text_block):
-    """एक टेक्स्ट ब्लॉक से प्रश्नों को निकालने का लॉजिक"""
+# OCR configuration (Language: Hindi + English)
+OCR_CONFIG = '--oem 3 --psm 6'
+
+def process_text(text):
+    """Text se questions nikalne ka wahi purana accurate logic"""
     quiz_data = []
-    # प्रश्न की शुरुआत पहचानना (e.g. 1. या Q1. या [1])
-    raw_blocks = re.split(r'\n(?=\d+[\.\)]|Q\d+[\.\)]|\[\d+\])', text_block)
-    
+    raw_blocks = re.split(r'\n(?=\d+[\.\)]|Q\d+[\.\)]|\[\d+\])', text)
     for block in raw_blocks:
         if not block.strip(): continue
         lines = block.strip().split('\n')
-        
-        question_parts = []
-        opt_a, opt_b, opt_c, opt_d = "", "", "", ""
-        ans, exp = "", ""
-        found_options = False
-
+        q_parts, opt_a, opt_b, opt_c, opt_d, ans, exp = [], "", "", "", "", "", ""
+        found_opts = False
         for line in lines:
             l = line.strip()
-            if not l: continue
-
-            # पैटर्न मैचिंग (English & Hindi)
-            if re.match(r'^[A|अ][\.\)]', l): 
-                opt_a = re.sub(r'^[A|अ][\.\)]', '', l).strip()
-                found_options = True
-            elif re.match(r'^[B|ब][\.\)]', l): 
-                opt_b = re.sub(r'^[B|ब][\.\)]', '', l).strip()
-                found_options = True
-            elif re.match(r'^[C|स][\.\)]', l): 
-                opt_c = re.sub(r'^[C|स][\.\)]', '', l).strip()
-                found_options = True
-            elif re.match(r'^[D|द][\.\)]', l): 
-                opt_d = re.sub(r'^[D|द][\.\)]', '', l).strip()
-                found_options = True
-            elif any(x in l for x in ["Answer", "Ans", "उत्तर", "Sahi uttar"]): 
-                ans = l
-                found_options = True
-            elif any(x in l for x in ["Explanation", "व्याख्या", "विवरण"]): 
-                exp = l
-                found_options = True
-            elif not found_options:
-                question_parts.append(l)
-
-        if question_parts and opt_a: # कम से कम Option A होना ज़रूरी है
-            quiz_data.append({
-                "Question": " ".join(question_parts),
-                "Option A": opt_a,
-                "Option B": opt_b,
-                "Option C": opt_c,
-                "Option D": opt_d,
-                "Correct Answer": ans,
-                "Explanation": exp
-            })
+            if re.match(r'^[A|अ][\.\)]', l): opt_a = re.sub(r'^[A|अ][\.\)]', '', l).strip(); found_opts = True
+            elif re.match(r'^[B|ब][\.\)]', l): opt_b = re.sub(r'^[B|ब][\.\)]', '', l).strip(); found_opts = True
+            elif re.match(r'^[C|स][\.\)]', l): opt_c = re.sub(r'^[C|स][\.\)]', '', l).strip(); found_opts = True
+            elif re.match(r'^[D|द][\.\)]', l): opt_d = re.sub(r'^[D|द][\.\)]', '', l).strip(); found_opts = True
+            elif any(x in l for x in ["Answer", "Ans", "उत्तर"]): ans = l; found_opts = True
+            elif any(x in l for x in ["Explanation", "व्याख्या"]): exp = l; found_opts = True
+            elif not found_opts: q_parts.append(l)
+        if q_parts and opt_a:
+            quiz_data.append({"Question": " ".join(q_parts), "Option A": opt_a, "Option B": opt_b, "Option C": opt_c, "Option D": opt_d, "Correct Answer": ans, "Explanation": exp})
     return quiz_data
 
-st.title("🎯 Pro Quiz Extractor (Double Column Support)")
-st.info("यह ऐप डबल कॉलम PDF को भी बाएँ से दाएँ (Left to Right) सही क्रम में पढ़ता है।")
+st.title("🤖 Universal Quiz Extractor (Text + OCR)")
+mode = st.radio("Processing Mode Chunein:", ("Fast Text (Digital PDF)", "OCR Mode (Scanned/Symbol PDF)"))
 
-uploaded_file = st.file_uploader("PDF अपलोड करें", type="pdf")
+uploaded_file = st.file_uploader("PDF File Upload Karein", type="pdf")
 
 if uploaded_file is not None:
     if st.button("Start Extraction"):
-        final_quiz_list = []
-        with fitz.open(stream=uploaded_file.read(), filetype="pdf") as doc:
-            for page in doc:
-                # पेज को दो हिस्सों में बाँटना (Double Column Logic)
-                width = page.rect.width
-                height = page.rect.height
-                
-                # Left Column (बायाँ हिस्सा)
-                left_rect = fitz.Rect(0, 0, width/2, height)
-                left_text = page.get_text("text", clip=left_rect)
-                final_quiz_list.extend(extract_from_column(left_text))
-                
-                # Right Column (दायाँ हिस्सा)
-                right_rect = fitz.Rect(width/2, 0, width, height)
-                right_text = page.get_text("text", clip=right_rect)
-                final_quiz_list.extend(extract_from_column(right_text))
+        final_data = []
+        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        progress = st.progress(0)
 
-        df = pd.DataFrame(final_quiz_list)
+        for i, page in enumerate(doc):
+            if mode == "Fast Text (Digital PDF)":
+                # Double Column Text Logic
+                w, h = page.rect.width, page.rect.height
+                left_text = page.get_text("text", clip=fitz.Rect(0, 0, w/2, h))
+                right_text = page.get_text("text", clip=fitz.Rect(w/2, 0, w, h))
+                final_data.extend(process_text(left_text))
+                final_data.extend(process_text(right_text))
+            else:
+                # OCR Mode (Har page ko image bana kar read karega)
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # Zoom for better OCR
+                img = Image.open(io.BytesIO(pix.tobytes()))
+                ocr_text = pytesseract.image_to_string(img, lang='hin+eng', config=OCR_CONFIG)
+                final_data.extend(process_text(ocr_text))
+            
+            progress.progress((i + 1) / len(doc))
+
+        df = pd.DataFrame(final_data)
         if not df.empty:
-            st.success(f"कुल {len(df)} सटीक प्रश्न मिले!")
+            st.success(f"Success! {len(df)} Questions mil gaye.")
             st.dataframe(df.head(20))
             csv = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
-            st.download_button("Download CSV", data=csv, file_name="pro_quiz_db.csv", mime="text/csv")
+            st.download_button("Download CSV", data=csv, file_name="universal_quiz_db.csv")
