@@ -1,3 +1,6 @@
 streamlit
-pandas
 pymupdf
+pandas
+pytesseract
+pillow
+pdf2image
